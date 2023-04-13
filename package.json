@@ -1,0 +1,38 @@
+{
+   "name": "@silvermine/markdownlint-rule-li-block-indent",
+   "version": "0.1.0",
+   "description": "A custom markdownlint rule for the indentation of wrapped lines and blocks within list items",
+   "main": "src/li-block-indent.js",
+   "scripts": {
+      "check-node-version": "check-node-version --npm 8.5.5",
+      "eslint": "eslint '{,!(node_modules|dist)/**/}*.js'",
+      "markdownlint": "markdownlint -c .markdownlint.json -i CHANGELOG.md '{,!(node_modules)/**/}*.md'",
+      "standards": "npm run markdownlint && npm run eslint",
+      "test": "mocha --forbid-only ./tests/**/*.test.js",
+      "release:preview": "node ./node_modules/@silvermine/standardization/scripts/release.js preview",
+      "release:prep-changelog": "node ./node_modules/@silvermine/standardization/scripts/release.js prep-changelog",
+      "release:finalize": "node ./node_modules/@silvermine/standardization/scripts/release.js finalize"
+   },
+   "repository": {
+      "type": "git",
+      "url": "git+https://github.com/silvermine/markdownlint-rule-li-block-indent.git"
+   },
+   "keywords": [
+      "markdownlint",
+      "list indentation"
+   ],
+   "author": "Jeremy Thomerson",
+   "license": "MIT",
+   "bugs": {
+      "url": "https://github.com/silvermine/markdownlint-rule-li-block-indent/issues"
+   },
+   "homepage": "https://github.com/silvermine/markdownlint-rule-li-block-indent#readme",
+   "devDependencies": {
+      "@silvermine/chai-strictly-equal": "1.1.0",
+      "@silvermine/eslint-config": "3.1.0-beta.0",
+      "@silvermine/standardization": "2.1.1",
+      "chai": "4.3.7",
+      "markdownlint": "0.27.0",
+      "mocha": "10.2.0"
+   }
+}
