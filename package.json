@@ -7,7 +7,7 @@
       "check-node-version": "check-node-version --npm 8.5.5",
       "commitlint": "commitlint --from 48c6ea7",
       "eslint": "eslint '{,!(node_modules|dist)/**/}*.js'",
-      "markdownlint": "markdownlint -c .markdownlint.json -i CHANGELOG.md '{,!(node_modules)/**/}*.md'",
+      "markdownlint": "markdownlint -r 'src/li-block-indent.js' -c .markdownlint.json -i CHANGELOG.md '{,!(node_modules)/**/}*.md'",
       "standards": "npm run commitlint && npm run markdownlint && npm run eslint",
       "test": "mocha --forbid-only ./tests/**/*.test.js",
       "release:preview": "node ./node_modules/@silvermine/standardization/scripts/release.js preview",
@@ -33,7 +33,10 @@
       "@silvermine/eslint-config": "3.1.0-beta.0",
       "@silvermine/standardization": "2.1.1",
       "chai": "4.3.7",
-      "markdownlint": "0.27.0",
-      "mocha": "10.2.0"
+      "mocha": "10.2.0",
+      "markdownlint": "0.27.0"
+   },
+   "dependencies": {
+      "markdownlint-rule-helpers": "0.18.0"
    }
 }
