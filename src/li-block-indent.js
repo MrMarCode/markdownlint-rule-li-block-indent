@@ -1,55 +1,124 @@
 'use strict';
-const { addErrorDetailIf, indentFor, listItemMarkerRe } = require('markdownlint-rule-helpers');
+const { addError } = require('markdownlint-rule-helpers');
 
-const orderedItemMarkerRe = /^(\s[*-+])0*(\d+)[.)]/;
+function allTheSame(array, field) {
+   if (array.length === 0) {
+      return true;
+   }
+   return array.every((value) => { return value[field] === array[0][field]; });
+}
 
-/**
- * Return the number of characters of indent for a token. This implementation is
- * different in that it does not account for blockquote symbols like the one from
- * markdownlint-rule-helpers.
- *
- * @param {Object} token MarkdownItToken instance.
- * @returns {number} Characters of indent.
- */
-function indentBeforeBlockquoteFor(token) {
-   return token.line.length - token.line.trimStart().length;
+function isUnordered(token) {
+   return token.type === 'listItemPrefix' && !token.text.match('.*\\d+.*');
+}
+
+function filterByType(array, type) {
+   return array.filter((value) => { return value.type === type; });
 }
 
 /**
- * Given a list item token, calculate the expected indentation for a sub-list.
- * According to the markdown spec, the indentation is marker width + trailing spaces. ie:
- * "1. li" = 3
- * "10. li" = 4
- * "10.  li" = 5
- * "* li" = 2
- * @param {object} token - list item token.
- * @returns {number} list item marker width. indicates indentation for sub lists.
+ * This function is used to detect the relative indent a token should be at based on
+ * different scenarios. Here is a summary:
+ * 1. If token is an unordered list and parent is unordered, then we check the
+ *    startColumn of the parent and add 'indent' setting to get the expected column.
+ * 2. If token is a list then we use endColumn of a parent list item.
+ * 3. If token is a blockquote, then we use endColumn of the parent blockquote
+ *    (list checks take priority).
+ * 4. If none of the above are true, then we base it on start_indent from settings.
+ * @param token the token being checked. ie: unorderedList, orderedList, blockQuote,
+ *              paragraph, etc...
+ * @param settings object with 'startIndent' and 'indent' settings.
+ * @param parentBlockQuote last blockQuote token processed.
+ * @param parentListItem immediate parent list item.
  */
-function getSubListIndentation(token) {
-   let markerWidth = 0;
+function getExpectedColumn(token, settings, parentBlockQuote, parentListItem) {
+   let expectedColumn = settings.startIndent + 1;
 
-   if (token.type !== 'list_item_open') {
-      return markerWidth;
+   if (parentListItem) {
+      expectedColumn = parentListItem.endColumn;
+      if (token.type === 'listUnordered' && isUnordered(parentListItem)) {
+         expectedColumn = parentListItem.startColumn + settings.indent;
+      }
+   } else if (parentBlockQuote) {
+      expectedColumn = parentBlockQuote.endColumn;
    }
 
-   let marker = token.info + token.markup;
+   return expectedColumn;
+}
 
-   // info is empty for unordered lists, but contains the number chars for ordered lists.
-   markerWidth += marker.length;
+function processToken(token, settings, onError, previousItems) {
+   const dataTokens = filterByType(token.children, 'data'),
+         prefixTokens = filterByType(token.children, 'linePrefix'),
+         listItemTokens = filterByType(token.children, 'listItemPrefix'),
+         blockQuotePrefixTokens = filterByType(token.children, 'blockQuotePrefix'),
+         codeFences = filterByType(token.children, 'codeFencedFence'),
+         expectedColumn = getExpectedColumn(token, settings, previousItems.blockQuote, previousItems.listItem);
 
-   if (marker === '*') {
-      marker = `[${marker}]`;
+   // code fence rules
+   if (codeFences.length !== 0) {
+      if (!allTheSame(codeFences, 'startColumn') || token.startColumn !== expectedColumn) {
+         addError(onError, token.startLine, 'Code fence has incorrect indentation.', token.text);
+         return true;
+      }
+   }
+   if (token.type === 'codeFence') {
+      return false;
    }
 
-   const spacesRegex = new RegExp(`^(?:[^\\n*.\\d\\w]*)(${marker})(\\s*)`);
-
-   const spacesAfterMarker = token.line.match(spacesRegex);
-
-   if (spacesAfterMarker) {
-      markerWidth += spacesAfterMarker[2].length;
+   // Paragraph rules
+   if (prefixTokens.length !== 0 && token.type === 'paragraph') {
+      // If dataTokens exist, there must also be an equal amount of prefix tokens.
+      if (!allTheSame(prefixTokens, 'startColumn') || dataTokens.length !== 0 && dataTokens.length !== prefixTokens.length) {
+         addError(onError, token.startLine, 'Paragraph has unbalanced indentation.', token.text);
+         return true;
+      }
+   }
+   // list and sub-list rules
+   if (listItemTokens.length !== 0) {
+      if (!allTheSame(listItemTokens, 'startColumn') || token.startColumn !== expectedColumn) {
+         addError(onError, token.startLine, 'List has incorrect indentation.', token.text);
+         return true;
+      }
    }
 
-   return markerWidth;
+   if (blockQuotePrefixTokens.length > 1) {
+      // TODO: one possible solution is if there are more than one blockQuotePrefix item
+      //       per line, then split those out and check them separately in a loop.
+      if (!allTheSame(blockQuotePrefixTokens, 'startColumn')) {
+         addError(onError, token.startLine, 'BlockQuote has inconsistent indentation.', token.text);
+         return true;
+      }
+   }
+}
+
+function traverseTokens(tokens, settings, tokensTypesToCheck, onError, previousItems) {
+   previousItems = previousItems ? { ...previousItems } : { listItem: undefined, blockQuote: undefined };
+
+   for (let i = 0; i < tokens.length; i++) {
+      let token = tokens[i];
+
+      if (token.type === 'listItemPrefix') {
+         previousItems.listItem = token;
+      } else if (token.type === 'blockQuote' && token.children) {
+         previousItems.blockQuote = token.children[0];
+      }
+
+      if (tokensTypesToCheck.includes(token.type)) {
+         if (processToken(token, settings, onError, previousItems)) {
+            // If there was an error, skip checking children objects.
+            if (token.type === 'blockQuote' && token.children) {
+               previousItems.blockQuote = token.children[0];
+            }
+            continue;
+         }
+         if (token.type === 'blockQuote' && token.children) {
+            previousItems.blockQuote = token.children[0];
+         }
+      }
+      if (token.children && token.children.length > 0) {
+         traverseTokens(token.children, settings, tokensTypesToCheck, onError, previousItems);
+      }
+   }
 }
 
 module.exports = {
@@ -60,94 +129,14 @@ module.exports = {
    tags: [ 'bullet', 'ul', 'il', 'indentation' ],
 
    'function': function liBlockIndent(params, onError) {
-      const stack = [];
+      let tokensTypesToCheck = [ 'paragraph', 'listUnordered', 'listOrdered', 'blockQuote', 'codeFenced' ];
 
-      let current = null;
+      const settings = {};
 
-      for (const token of params.tokens) {
-         if (token.type === 'bullet_list_open' || token.type === 'ordered_list_open') {
-            // Save current context and start a new one
-            stack.push(current);
-            current = {
-               indent: indentFor(token),
-               items: [],
-            };
-         } else if (token.type === 'bullet_list_close' || token.type === 'ordered_list_close') {
-            // restore previous context
-            current = stack.pop();
-         } else if (token.type === 'list_item_open') {
-            current.items.push(token);
-         } else if (token.type === 'fence') {
-            // This block checks the opening and closing fence for indentation
-            let expectedIndent = 0;
+      settings.indent = Number(params.config.indent || 2);
+      settings.startIndent = Number(params.config.start_indent || 0);
 
-            if (current !== null) {
-               const lastToken = current.items[current.items.length - 1];
-
-               expectedIndent = current.indent + getSubListIndentation(lastToken);
-            }
-
-            const subFenceItems = token.content.split('\n');
-
-            if (subFenceItems.length > 1) {
-               const endingFenceLineNumber = token.lineNumber + subFenceItems.length;
-
-               const startingFenceIndent = indentFor({ line: params.lines[token.lineNumber - 1] });
-
-               addErrorDetailIf(onError, token.lineNumber, expectedIndent, startingFenceIndent, null, null);
-
-               const endingFenceLine = params.lines[endingFenceLineNumber - 1];
-
-               // The spec allows you to omit closing fence. Therefore, we need to check
-               // if a closing fence exists before testing it's indentation length.
-               if (endingFenceLine.includes('```') || endingFenceLine.includes('~~~')) {
-                  const endingFenceIndent = indentFor({ line: params.lines[endingFenceLineNumber - 1] });
-
-                  addErrorDetailIf(onError, endingFenceLineNumber, expectedIndent, endingFenceIndent, null, null);
-               }
-            }
-         } else if (token.type === 'inline' && token.children.length > 0) {
-            let lastToken,
-                expectedIndent;
-
-            if (current) {
-               lastToken = current.items[current.items.length - 1];
-               expectedIndent = current.indent + getSubListIndentation(lastToken);
-            } else if (token.level === 1 || current === null) {
-               expectedIndent = 0;
-            }
-
-            token.children.reduce((linesProcessed, child) => {
-               // Avoid a child without a line or a line that's already been processed.
-               if (child.line === undefined || linesProcessed.includes(child.lineNumber)) {
-                  return linesProcessed;
-               }
-
-               linesProcessed.push(child.lineNumber);
-               if (child.line.match(listItemMarkerRe) || child.line.match(orderedItemMarkerRe)) {
-                  // Another rule handles checking sub-lists, so we ignore them here.
-                  return linesProcessed;
-               }
-
-               let actualIndent = indentFor(child);
-
-               const indentBeforeBlockquote = indentBeforeBlockquoteFor(child);
-
-               // We want to check indentation before and after any blockquotes, but not
-               // both at the same time. This checks indentation before block quotes in
-               // 2 cases:
-               // 1. If we're not in a list (current === null) and the indentation after
-               //    a blockquote is correct.
-               // 2. If indentation after a blockquote is wrong.
-               if (current === null && actualIndent === expectedIndent || actualIndent !== expectedIndent) {
-                  actualIndent = indentBeforeBlockquote;
-               }
-
-               addErrorDetailIf(onError, child.lineNumber, expectedIndent, actualIndent, null, child.line);
-               return linesProcessed;
-            }, []);
-         }
-      }
+      traverseTokens(params.parsers.micromark.tokens, settings, tokensTypesToCheck, onError);
    },
 
 };
